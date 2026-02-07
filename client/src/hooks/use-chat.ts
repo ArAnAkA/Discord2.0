@@ -114,6 +114,24 @@ export function useMessages(channelId: number) {
 
 // --- FILE UPLOAD ---
 
+export function useSendMessage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ channelId, content, attachmentUrl }: { channelId: number, content?: string, attachmentUrl?: string }) => {
+      const res = await fetch(`/api/channels/${channelId}/messages`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ content, attachmentUrl }),
+      });
+      if (!res.ok) throw new Error("Failed to send message");
+      return await res.json();
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: [api.channels.messages.path, variables.channelId] });
+    },
+  });
+}
+
 export function useUploadFile() {
   return useMutation({
     mutationFn: async (file: File) => {

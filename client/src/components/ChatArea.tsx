@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "wouter";
-import { useChannels, useMessages } from "@/hooks/use-chat";
-import { Hash, Plus, Gift, Smile, Sticker, Send } from "lucide-react";
+import { useChannels, useMessages, useSendMessage, useUploadFile } from "@/hooks/use-chat";
+import { Hash, Plus, Gift, Smile, Sticker, Send, FileIcon, X, Download, ImageIcon } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -13,9 +13,12 @@ export function ChatArea() {
   const serverId = Number(params.serverId);
   const channelId = Number(params.channelId);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const { data: channels } = useChannels(serverId);
   const { data: messages, isLoading } = useMessages(channelId);
+  const sendMessageMutation = useSendMessage();
+  const uploadFileMutation = useUploadFile();
   
   const currentChannel = channels?.find(c => c.id === channelId);
   
@@ -28,15 +31,36 @@ export function ChatArea() {
     }
   }, [messages]);
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!messageInput.trim()) return;
     
-    // In a real app, use mutation here. 
-    // Optimistic updates handled by query cache invalidation or manual update.
-    console.log("Sending:", messageInput);
-    
+    const content = messageInput;
     setMessageInput("");
+
+    try {
+      await sendMessageMutation.mutateAsync({
+        channelId,
+        content
+      });
+    } catch (error) {
+      console.error("Failed to send message:", error);
+    }
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const { url } = await uploadFileMutation.mutateAsync(file);
+      await sendMessageMutation.mutateAsync({
+        channelId,
+        attachmentUrl: url
+      });
+    } catch (error) {
+      console.error("Upload failed:", error);
+    }
   };
 
   if (!channelId) {
@@ -85,6 +109,8 @@ export function ChatArea() {
           // Simple heuristic for grouping: same user and less than 5 mins apart
           const isGrouped = isSameUser && (new Date(msg.createdAt!).getTime() - new Date(prevMsg.createdAt!).getTime() < 5 * 60 * 1000);
 
+          const isImage = msg.attachmentUrl?.match(/\.(jpg|jpeg|png|gif|webp)$/i);
+
           return (
             <div key={msg.id} className={`flex group ${isGrouped ? 'mt-1' : 'mt-6'}`}>
                {!isGrouped ? (
@@ -105,9 +131,46 @@ export function ChatArea() {
                        <span className="text-xs text-muted-foreground">{format(new Date(msg.createdAt!), 'MM/dd/yyyy h:mm aa')}</span>
                     </div>
                   )}
-                  <p className={`text-base text-foreground/90 whitespace-pre-wrap leading-relaxed ${!isGrouped ? '' : ''}`}>
-                    {msg.content}
-                  </p>
+                  {msg.content && (
+                    <p className={`text-base text-foreground/90 whitespace-pre-wrap leading-relaxed`}>
+                      {msg.content}
+                    </p>
+                  )}
+                  {msg.attachmentUrl && (
+                    <div className="mt-2">
+                      {isImage ? (
+                        <div className="relative group/image max-w-sm rounded-lg overflow-hidden border border-border/50">
+                          <img src={msg.attachmentUrl} alt="attachment" className="max-h-80 w-auto object-contain bg-card/50" />
+                          <a 
+                            href={msg.attachmentUrl} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="absolute top-2 right-2 p-1.5 bg-background/80 backdrop-blur-sm rounded-md opacity-0 group-hover/image:opacity-100 transition-opacity hover:bg-primary hover:text-primary-foreground"
+                          >
+                            <Download size={16} />
+                          </a>
+                        </div>
+                      ) : (
+                        <div className="flex items-center p-3 bg-card rounded-lg border border-border/50 max-w-sm group/file">
+                          <div className="h-10 w-10 bg-primary/10 rounded flex items-center justify-center text-primary mr-3">
+                            <FileIcon size={24} />
+                          </div>
+                          <div className="flex-1 min-w-0 mr-3">
+                            <p className="text-sm font-medium text-foreground truncate">{msg.attachmentUrl.split('-').slice(2).join('-') || 'File'}</p>
+                            <p className="text-xs text-muted-foreground uppercase">Attachment</p>
+                          </div>
+                          <a 
+                            href={msg.attachmentUrl} 
+                            target="_blank" 
+                            rel="noreferrer"
+                            className="p-2 text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            <Download size={20} />
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
                </div>
             </div>
           );
@@ -117,7 +180,16 @@ export function ChatArea() {
       {/* Input Area */}
       <div className="px-4 pb-6 pt-2 z-10 bg-background">
         <div className="bg-card/80 rounded-lg p-2.5 flex items-start shadow-lg ring-1 ring-white/5 focus-within:ring-primary/50 transition-all">
-          <button className="p-2 text-muted-foreground hover:text-foreground rounded-full hover:bg-white/10 transition-colors mr-2 self-start mt-0.5">
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileUpload} 
+            className="hidden" 
+          />
+          <button 
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 text-muted-foreground hover:text-foreground rounded-full hover:bg-white/10 transition-colors mr-2 self-start mt-0.5"
+          >
             <Plus size={20} className="bg-foreground rounded-full text-card p-0.5" />
           </button>
           
@@ -141,10 +213,11 @@ export function ChatArea() {
              <button className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded">
                 <Smile size={20} />
              </button>
-             {messageInput.trim().length > 0 && (
+             {(messageInput.trim().length > 0 || uploadFileMutation.isPending) && (
                 <button 
                   onClick={handleSendMessage}
-                  className="p-2 text-primary hover:text-primary-foreground hover:bg-primary transition-colors rounded"
+                  disabled={uploadFileMutation.isPending}
+                  className="p-2 text-primary hover:text-primary-foreground hover:bg-primary transition-colors rounded disabled:opacity-50"
                 >
                   <Send size={20} />
                 </button>
