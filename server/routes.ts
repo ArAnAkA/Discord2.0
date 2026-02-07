@@ -258,10 +258,23 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ownerId: user.id
       });
       
-      // Create extra channels
-      const channels = ["random", "introductions", "memes"];
-      for (const name of channels) {
+      // Create Favorites Server (as a special server/space)
+      const favoritesServer = await storage.createServer({
+        name: "Избранное",
+        iconUrl: "https://api.dicebear.com/7.x/initials/svg?seed=Fav&backgroundColor=0dd6f2",
+        ownerId: user.id
+      });
+
+      // Create extra channels for Aurora Hub
+      const auroraChannels = ["random", "introductions", "memes"];
+      for (const name of auroraChannels) {
         await storage.createChannel({ serverId: server.id, name, type: "text" });
+      }
+
+      // Create channels for Favorites
+      const favChannels = ["заметки", "ссылки", "медиа"];
+      for (const name of favChannels) {
+        await storage.createChannel({ serverId: favoritesServer.id, name, type: "text" });
       }
       
       console.log("Seeding complete!");
