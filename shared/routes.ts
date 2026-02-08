@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { insertUserSchema, insertServerSchema, insertChannelSchema, insertMessageSchema, users, servers, channels, messages, serverMembers } from './schema';
 
+type PublicUser = Omit<typeof users.$inferSelect, "password">;
+
 export const errorSchemas = {
   validation: z.object({
     message: z.string(),
@@ -24,7 +26,7 @@ export const api = {
       path: '/api/auth/register' as const,
       input: insertUserSchema,
       responses: {
-        201: z.object({ token: z.string(), user: z.custom<typeof users.$inferSelect>() }),
+        201: z.object({ token: z.string(), user: z.custom<PublicUser>() }),
         400: errorSchemas.validation,
       },
     },
@@ -33,16 +35,40 @@ export const api = {
       path: '/api/auth/login' as const,
       input: z.object({ username: z.string(), password: z.string() }),
       responses: {
-        200: z.object({ token: z.string(), user: z.custom<typeof users.$inferSelect>() }),
+        200: z.object({ token: z.string(), user: z.custom<PublicUser>() }),
         401: errorSchemas.unauthorized,
+      },
+    },
+    logout: {
+      method: 'POST' as const,
+      path: '/api/auth/logout' as const,
+      responses: {
+        204: z.undefined(),
       },
     },
     me: {
       method: 'GET' as const,
       path: '/api/auth/me' as const,
       responses: {
-        200: z.custom<typeof users.$inferSelect>(),
+        200: z.custom<PublicUser>(),
         401: errorSchemas.unauthorized,
+      },
+    },
+  },
+  users: {
+    me: {
+      update: {
+        method: 'PATCH' as const,
+        path: '/api/users/me' as const,
+        input: z.object({
+          displayName: z.string().min(1).optional(),
+          avatarUrl: z.string().min(1).optional(),
+        }),
+        responses: {
+          200: z.custom<PublicUser>(),
+          400: errorSchemas.validation,
+          401: errorSchemas.unauthorized,
+        },
       },
     },
   },
@@ -66,7 +92,18 @@ export const api = {
       method: 'GET' as const,
       path: '/api/servers/:id' as const,
       responses: {
-        200: z.custom<typeof servers.$inferSelect & { channels: typeof channels.$inferSelect[], members: typeof users.$inferSelect[] }>(),
+        200: z.custom<typeof servers.$inferSelect & { channels: typeof channels.$inferSelect[], members: PublicUser[] }>(),
+        404: errorSchemas.notFound,
+      },
+    },
+    update: {
+      method: 'PATCH' as const,
+      path: '/api/servers/:id' as const,
+      input: z.object({ name: z.string().min(1) }),
+      responses: {
+        200: z.custom<typeof servers.$inferSelect>(),
+        400: errorSchemas.validation,
+        401: errorSchemas.unauthorized,
         404: errorSchemas.notFound,
       },
     },
@@ -76,7 +113,18 @@ export const api = {
       responses: {
         200: z.custom<typeof serverMembers.$inferSelect>(),
       }
-    }
+    },
+    invite: {
+      method: 'POST' as const,
+      path: '/api/servers/:id/invite' as const,
+      input: z.object({ username: z.string().min(1) }),
+      responses: {
+        200: z.object({ ok: z.literal(true) }),
+        400: errorSchemas.validation,
+        401: errorSchemas.unauthorized,
+        404: errorSchemas.notFound,
+      },
+    },
   },
   channels: {
     list: {
@@ -98,7 +146,7 @@ export const api = {
       method: 'GET' as const,
       path: '/api/channels/:channelId/messages' as const,
       responses: {
-        200: z.array(z.custom<typeof messages.$inferSelect & { sender: typeof users.$inferSelect }>()),
+        200: z.array(z.custom<typeof messages.$inferSelect & { sender: PublicUser }>()),
       },
     },
   },

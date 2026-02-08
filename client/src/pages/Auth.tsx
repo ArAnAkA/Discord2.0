@@ -1,15 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { insertUserSchema } from "@shared/schema";
-import { useLogin, useRegister, useAuthStore } from "@/hooks/use-auth";
+import { useLogin, useRegister, useAuthStore, useMe } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 
 // Separate schemas for Login and Register
 const loginSchema = z.object({
@@ -28,15 +29,25 @@ const registerSchema = insertUserSchema.extend({
 export default function AuthPage() {
   const [isLogin, setIsLogin] = useState(true);
   const [, setLocation] = useLocation();
-  const { isAuthenticated } = useAuthStore();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isInitialized = useAuthStore((s) => s.isInitialized);
+  const { isLoading: isLoadingMe } = useMe();
   
   const loginMutation = useLogin();
   const registerMutation = useRegister();
 
-  // Redirect if already logged in
-  if (isAuthenticated) {
-    setLocation("/app");
-    return null;
+  useEffect(() => {
+    if (isAuthenticated) {
+      setLocation("/app");
+    }
+  }, [isAuthenticated, setLocation]);
+
+  if (!isInitialized || isLoadingMe) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-background">
+        <Loader2 className="animate-spin text-primary w-8 h-8" />
+      </div>
+    );
   }
 
   return (
@@ -95,6 +106,7 @@ export default function AuthPage() {
 }
 
 function LoginForm({ onSubmit, isLoading }: { onSubmit: (data: any) => void, isLoading: boolean }) {
+  const { toast } = useToast();
   const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(loginSchema)
   });
@@ -120,7 +132,13 @@ function LoginForm({ onSubmit, isLoading }: { onSubmit: (data: any) => void, isL
           className="bg-background/50 border-input/50 focus:ring-primary/50" 
         />
         {errors.password && <p className="text-xs text-red-500 font-bold mt-1">{(errors.password.message as string)}</p>}
-        <div className="text-xs text-primary hover:underline cursor-pointer">Forgot your password?</div>
+        <button
+          type="button"
+          onClick={() => toast({ title: "Not implemented", description: "Password recovery is not available yet." })}
+          className="text-xs text-primary hover:underline cursor-pointer text-left"
+        >
+          Forgot your password?
+        </button>
       </div>
 
       <Button type="submit" className="w-full bg-primary hover:bg-primary/80 text-primary-foreground font-bold mt-4" disabled={isLoading}>

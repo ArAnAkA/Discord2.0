@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { type ChangeEvent, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { insertServerSchema } from '@shared/schema';
@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useCreateServer } from '@/hooks/use-chat';
+import { useCreateServer, useUploadFile } from '@/hooks/use-chat';
 import { Plus, Upload, Loader2 } from 'lucide-react';
 import { z } from 'zod';
 
@@ -20,17 +20,34 @@ type FormValues = z.infer<typeof formSchema>;
 export function CreateServerModal() {
   const [open, setOpen] = useState(false);
   const createServer = useCreateServer();
+  const uploadFile = useUploadFile();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   
-  const { register, handleSubmit, formState: { errors }, reset } = useForm<FormValues>({
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       name: "",
-      iconUrl: "", // Just standard string input for now
+      iconUrl: undefined,
     }
   });
 
+  const iconUrl = watch("iconUrl");
+
+  const handleIconUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    try {
+      const { url } = await uploadFile.mutateAsync(file);
+      setValue("iconUrl", url, { shouldDirty: true });
+    } catch {
+      // Errors are handled by the mutation toast
+    }
+  };
+
   const onSubmit = (data: FormValues) => {
-    createServer.mutate(data, {
+    createServer.mutate({ ...data, iconUrl: data.iconUrl || undefined }, {
       onSuccess: () => {
         setOpen(false);
         reset();
@@ -58,11 +75,34 @@ export function CreateServerModal() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 pt-4">
           <div className="flex justify-center">
-             {/* Placeholder for file upload UI */}
-            <div className="w-24 h-24 rounded-full bg-muted border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center text-xs text-muted-foreground cursor-pointer hover:bg-muted/80 transition-colors">
-              <Upload className="mb-1 opacity-50" size={24} />
-              <span>Upload</span>
-            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleIconUpload}
+              className="hidden"
+            />
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="w-24 h-24 rounded-full bg-muted border-2 border-dashed border-muted-foreground/30 flex flex-col items-center justify-center text-xs text-muted-foreground cursor-pointer hover:bg-muted/80 transition-colors overflow-hidden"
+              aria-label="Upload server icon"
+              disabled={uploadFile.isPending}
+            >
+              {iconUrl ? (
+                <img src={iconUrl} alt="Server icon" className="w-full h-full object-cover" />
+              ) : (
+                <>
+                  {uploadFile.isPending ? (
+                    <Loader2 className="mb-1 opacity-70 animate-spin" size={24} />
+                  ) : (
+                    <Upload className="mb-1 opacity-50" size={24} />
+                  )}
+                  <span>Upload</span>
+                </>
+              )}
+            </button>
           </div>
 
           <div className="space-y-2">

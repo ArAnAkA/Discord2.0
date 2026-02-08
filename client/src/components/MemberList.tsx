@@ -1,17 +1,31 @@
+import { useState } from "react";
 import { useServer } from "@/hooks/use-chat";
 import { useParams } from "wouter";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { type ProfileUser, UserProfileModal } from "@/components/UserProfileModal";
 
 export function MemberList() {
   const { serverId } = useParams();
   const { data: server } = useServer(Number(serverId));
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileUser, setProfileUser] = useState<ProfileUser | null>(null);
 
   if (!server) return null;
 
   // Group members by online status (mocked for now since schema doesn't fully track RT status yet)
   const onlineMembers = server.members?.filter(m => m.online) || [];
   const offlineMembers = server.members?.filter(m => !m.online) || [];
+
+  const openProfile = (member: any) => {
+    setProfileUser({
+      id: member.id,
+      username: member.username,
+      displayName: member.displayName,
+      avatarUrl: member.avatarUrl ?? null,
+    });
+    setProfileOpen(true);
+  };
 
   return (
     <div className="w-60 hidden lg:flex bg-card/40 h-full flex-col border-l border-border/40">
@@ -22,7 +36,11 @@ export function MemberList() {
           <h3 className="text-xs font-bold text-muted-foreground uppercase mb-2 px-2">Online — {onlineMembers.length}</h3>
           <div className="space-y-1">
             {onlineMembers.map((member) => (
-              <div key={member.id} className="flex items-center px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer group opacity-100 transition-colors">
+              <div
+                key={member.id}
+                className="flex items-center px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer group opacity-100 transition-colors"
+                onClick={() => openProfile(member)}
+              >
                  <div className="relative mr-3">
                    <Avatar className="h-8 w-8">
                      <AvatarImage src={member.avatarUrl || undefined} />
@@ -52,7 +70,11 @@ export function MemberList() {
           <h3 className="text-xs font-bold text-muted-foreground uppercase mb-2 px-2">Offline — {offlineMembers.length}</h3>
           <div className="space-y-1">
             {offlineMembers.map((member) => (
-              <div key={member.id} className="flex items-center px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer group opacity-60 hover:opacity-100 transition-all">
+              <div
+                key={member.id}
+                className="flex items-center px-2 py-1.5 rounded hover:bg-white/5 cursor-pointer group opacity-60 hover:opacity-100 transition-all"
+                onClick={() => openProfile(member)}
+              >
                  <div className="relative mr-3">
                    <Avatar className="h-8 w-8 grayscale group-hover:grayscale-0 transition-all">
                      <AvatarImage src={member.avatarUrl || undefined} />
@@ -73,6 +95,7 @@ export function MemberList() {
         </div>
 
       </ScrollArea>
+      <UserProfileModal open={profileOpen} onOpenChange={setProfileOpen} user={profileUser} />
     </div>
   );
 }

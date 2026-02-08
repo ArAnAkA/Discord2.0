@@ -62,7 +62,10 @@ export function CreateChannelModal({ serverId }: { serverId: number }) {
               onValueChange={(val) => setValue("type", val as "text" | "voice")}
               className="grid gap-2"
             >
-              <div className={`flex items-center space-x-3 rounded-md border p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedType === 'text' ? 'bg-muted/60 border-primary/50' : 'border-border'}`}>
+              <div
+                onClick={() => setValue("type", "text")}
+                className={`flex items-center space-x-3 rounded-md border p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedType === 'text' ? 'bg-muted/60 border-primary/50' : 'border-border'}`}
+              >
                 <RadioGroupItem value="text" id="text" className="sr-only" />
                 <Hash className="text-muted-foreground" size={24} />
                 <div className="flex-1">
@@ -74,7 +77,10 @@ export function CreateChannelModal({ serverId }: { serverId: number }) {
                 </div>
               </div>
 
-              <div className={`flex items-center space-x-3 rounded-md border p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedType === 'voice' ? 'bg-muted/60 border-primary/50' : 'border-border'}`}>
+              <div
+                onClick={() => setValue("type", "voice")}
+                className={`flex items-center space-x-3 rounded-md border p-4 cursor-pointer hover:bg-muted/50 transition-colors ${selectedType === 'voice' ? 'bg-muted/60 border-primary/50' : 'border-border'}`}
+              >
                 <RadioGroupItem value="voice" id="voice" className="sr-only" />
                 <Volume2 className="text-muted-foreground" size={24} />
                 <div className="flex-1">

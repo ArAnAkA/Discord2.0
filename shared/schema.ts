@@ -77,6 +77,9 @@ export const insertMessageSchema = createInsertSchema(messages).pick({
 // Types
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
+export type InsertServer = z.infer<typeof insertServerSchema>;
+export type InsertChannel = z.infer<typeof insertChannelSchema>;
+export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Server = typeof servers.$inferSelect;
 export type Channel = typeof channels.$inferSelect;
 export type Message = typeof messages.$inferSelect;

@@ -90,12 +90,27 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  const host = process.env.HOST || "0.0.0.0";
+
+  httpServer.on("error", (err: any) => {
+    if (err?.code === "EADDRINUSE") {
+      log(
+        `port ${port} is already in use (EADDRINUSE). Stop the other process or change PORT in .env.`,
+      );
+      process.exit(1);
+    }
+
+    console.error("Server error:", err);
+    process.exit(1);
+  });
+
+  // `reusePort` is not supported on Windows (ENOTSUP).
+  const listenOptions =
+    process.platform === "win32"
+      ? { port, host }
+      : { port, host, reusePort: true };
   httpServer.listen(
-    {
-      port,
-      host: "0.0.0.0",
-      reusePort: true,
-    },
+    listenOptions,
     () => {
       log(`serving on port ${port}`);
     },

@@ -1,29 +1,41 @@
 import { useEffect } from "react";
-import { useLocation, Route, Switch } from "wouter";
+import { useLocation, Route, Switch, Redirect } from "wouter";
 import { useAuthStore, useMe } from "@/hooks/use-auth";
 import { ServerRail } from "@/components/ServerRail";
 import { ChannelList } from "@/components/ChannelList";
-import { ChatArea } from "@/components/ChatArea";
+import { ChannelMain } from "@/components/ChannelMain";
 import { MemberList } from "@/components/MemberList";
 import { Loader2 } from "lucide-react";
+import { connectSocket } from "@/lib/socket";
 
 export default function Dashboard() {
-  const [, setLocation] = useLocation();
-  const { isAuthenticated } = useAuthStore();
+  const [location, setLocation] = useLocation();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const isInitialized = useAuthStore((s) => s.isInitialized);
   const { data: user, isLoading: isLoadingMe } = useMe();
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      setLocation("/");
+    if (location.length > 1 && location.endsWith("/")) {
+      setLocation(location.slice(0, -1));
     }
-  }, [isAuthenticated, setLocation]);
+  }, [location, setLocation]);
 
-  if (isLoadingMe || !user) {
+  useEffect(() => {
+    if (isInitialized && isAuthenticated) {
+      connectSocket();
+    }
+  }, [isAuthenticated, isInitialized]);
+
+  if (!isInitialized || isLoadingMe) {
     return (
       <div className="h-screen w-full flex items-center justify-center bg-background">
         <Loader2 className="animate-spin text-primary w-8 h-8" />
       </div>
     );
+  }
+
+  if (!isAuthenticated || !user) {
+    return <Redirect to="/" />;
   }
 
   return (
@@ -55,7 +67,7 @@ export default function Dashboard() {
         {/* Route: /app/:serverId/:channelId (Full Chat View) */}
         <Route path="/app/:serverId/:channelId">
            <ChannelList />
-           <ChatArea />
+           <ChannelMain />
            <MemberList />
         </Route>
       </Switch>

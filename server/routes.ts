@@ -7,17 +7,78 @@ import fs from "fs";
 import express from "express";
 import { storage } from "./storage";
 import { api } from "@shared/routes";
-import { insertUserSchema, insertServerSchema, insertChannelSchema } from "@shared/schema";
+import type { User } from "@shared/schema";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 
-const JWT_SECRET = process.env.JWT_SECRET || "replit-aurora-secret";
+const JWT_COOKIE_NAME = "aurora_auth";
+const TOKEN_TTL_MS = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+const JWT_SECRET = process.env.JWT_SECRET || "aurora-dev-secret";
+
+if (process.env.NODE_ENV === "production" && !process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET must be set in production");
+}
+
+type PublicUser = Omit<User, "password">;
+
+function toPublicUser(user: User): PublicUser {
+  const { password, ...publicUser } = user;
+  void password;
+  return publicUser;
+}
+
+function getCookieValue(cookieHeader: string | undefined, cookieName: string): string | undefined {
+  if (!cookieHeader) return undefined;
+
+  const parts = cookieHeader.split(";");
+  for (const part of parts) {
+    const [name, ...valueParts] = part.trim().split("=");
+    if (name === cookieName) {
+      return decodeURIComponent(valueParts.join("="));
+    }
+  }
+
+  return undefined;
+}
+
+function getTokenFromRequest(req: Request): string | undefined {
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    return authHeader.slice("Bearer ".length);
+  }
+
+  return getCookieValue(req.headers.cookie, JWT_COOKIE_NAME);
+}
+
+function setAuthCookie(res: Response, token: string) {
+  res.cookie(JWT_COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    maxAge: TOKEN_TTL_MS,
+    path: "/",
+  });
+}
+
+function clearAuthCookie(res: Response) {
+  res.clearCookie(JWT_COOKIE_NAME, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+  });
+}
+
+function getParam(value: string | string[] | undefined): string {
+  if (Array.isArray(value)) return value[0] ?? "";
+  return value ?? "";
+}
 
 // Middleware to verify JWT
 const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token = getTokenFromRequest(req);
 
   if (!token) return res.sendStatus(401);
 
@@ -34,11 +95,32 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     cors: { origin: "*" }
   });
 
+  io.use(async (socket, next) => {
+    try {
+      const token = getCookieValue(socket.handshake.headers.cookie, JWT_COOKIE_NAME);
+      if (!token) return next(new Error("unauthorized"));
+
+      const decoded = jwt.verify(token, JWT_SECRET) as { id: number; username: string };
+      const user = await storage.getUser(decoded.id);
+      if (!user) return next(new Error("unauthorized"));
+
+      socket.data.userId = user.id;
+      socket.data.user = toPublicUser(user);
+      return next();
+    } catch {
+      return next(new Error("unauthorized"));
+    }
+  });
+
+  const voiceJoinSchema = z.object({ channelId: z.coerce.number().int().positive() });
+  const voiceSignalSchema = z.object({ to: z.string().min(1), data: z.unknown() });
+
   // Socket.IO Logic
   io.on("connection", (socket) => {
     console.log("New client connected", socket.id);
 
-    // Join room based on authentication or manual join
+    // Register handlers first (avoid dropping early emits right after connect).
+    // Join room based on manual join (used for text realtime if needed)
     socket.on("join:channel", (channelId) => {
       socket.join(`channel:${channelId}`);
     });
@@ -51,23 +133,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       socket.to(`channel:${channelId}`).emit("typing:stop", { username });
     });
 
-    socket.on("auth:identify", async ({ token }) => {
-      try {
-        const decoded = jwt.verify(token, JWT_SECRET) as any;
-        await storage.updateUserOnline(decoded.id, true);
-        io.emit("presence:update", { userId: decoded.id, online: true });
-        (socket as any).userId = decoded.id;
-      } catch (e) {
-        console.error("Socket auth failed");
+    socket.on("voice:join", async (payload) => {
+      const parsed = voiceJoinSchema.safeParse(payload);
+      if (!parsed.success) return socket.emit("voice:error", { message: "Invalid channel" });
+
+      const channelId = parsed.data.channelId;
+      const channel = await storage.getChannel(channelId);
+      if (!channel) return socket.emit("voice:error", { message: "Channel not found" });
+      if (channel.type !== "voice") return socket.emit("voice:error", { message: "Not a voice channel" });
+
+      if (channel.serverId) {
+        const isMember = await storage.isMember(channel.serverId, socket.data.userId);
+        if (!isMember) return socket.emit("voice:error", { message: "Not a member" });
       }
+
+      const prevChannelId: number | undefined = socket.data.voiceChannelId;
+      if (prevChannelId && prevChannelId !== channelId) {
+        socket.leave(`voice:${prevChannelId}`);
+        socket.to(`voice:${prevChannelId}`).emit("voice:peer-left", { peerId: socket.id });
+      }
+
+      socket.data.voiceChannelId = channelId;
+      socket.join(`voice:${channelId}`);
+
+      const sockets = await io.in(`voice:${channelId}`).fetchSockets();
+      const peers = sockets
+        .filter((s) => s.id !== socket.id)
+        .map((s) => ({ peerId: s.id, user: s.data.user }));
+
+      socket.emit("voice:peers", { channelId, peers });
+      socket.to(`voice:${channelId}`).emit("voice:peer-joined", { peerId: socket.id, user: socket.data.user });
+    });
+
+    socket.on("voice:leave", () => {
+      const channelId: number | undefined = socket.data.voiceChannelId;
+      if (!channelId) return;
+      socket.data.voiceChannelId = undefined;
+      socket.leave(`voice:${channelId}`);
+      socket.to(`voice:${channelId}`).emit("voice:peer-left", { peerId: socket.id });
+    });
+
+    socket.on("voice:signal", (payload) => {
+      const parsed = voiceSignalSchema.safeParse(payload);
+      if (!parsed.success) return;
+      io.to(parsed.data.to).emit("voice:signal", { from: socket.id, data: parsed.data.data });
     });
 
     socket.on("disconnect", async () => {
-      if ((socket as any).userId) {
-        await storage.updateUserOnline((socket as any).userId, false);
-        io.emit("presence:update", { userId: (socket as any).userId, online: false });
+      const channelId: number | undefined = socket.data.voiceChannelId;
+      if (channelId) {
+        socket.to(`voice:${channelId}`).emit("voice:peer-left", { peerId: socket.id });
       }
+
+      await storage.updateUserOnline(socket.data.userId, false);
+      io.emit("presence:update", { userId: socket.data.userId, online: false });
     });
+
+    // Presence update (async; doesn't block handler registration)
+    void storage
+      .updateUserOnline(socket.data.userId, true)
+      .then(() => {
+        io.emit("presence:update", { userId: socket.data.userId, online: true });
+      })
+      .catch((err) => {
+        console.error("Failed to update presence:", err);
+      });
   });
 
   // Multer setup
@@ -77,13 +207,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   }
   
   const storageConfig = multer.diskStorage({
-    destination: function (req, file, cb) {
-      cb(null, uploadsDir)
+    destination: (_req, _file, cb) => cb(null, uploadsDir),
+    filename: (_req, file, cb) => {
+      const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+      cb(null, `${uniqueSuffix}-${file.originalname}`);
     },
-    filename: function (req, file, cb) {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9)
-      cb(null, uniqueSuffix + '-' + file.originalname)
-    }
   });
   
   const upload = multer({ 
@@ -105,9 +233,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
       const hashedPassword = await bcrypt.hash(input.password, 10);
       const user = await storage.createUser({ ...input, password: hashedPassword });
-      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
 
-      res.status(201).json({ token, user });
+      // Create a starter server for new users so the UI has something to show
+      await storage.createServer({
+        name: `${user.displayName}'s server`,
+        iconUrl: user.avatarUrl,
+        ownerId: user.id,
+      });
+
+      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, {
+        expiresIn: Math.floor(TOKEN_TTL_MS / 1000),
+      });
+
+      setAuthCookie(res, token);
+      res.status(201).json({ token, user: toPublicUser(user) });
     } catch (e) {
       if (e instanceof z.ZodError) {
         return res.status(400).json({ message: e.errors[0].message });
@@ -118,24 +257,52 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
 
   app.post(api.auth.login.path, async (req, res) => {
     try {
-      const { username, password } = req.body;
+      const { username, password } = api.auth.login.input.parse(req.body);
       const user = await storage.getUserByUsername(username);
       
       if (!user || !(await bcrypt.compare(password, user.password))) {
         return res.status(401).json({ message: "Invalid credentials" });
       }
 
-      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, { expiresIn: '7d' });
-      res.status(200).json({ token, user });
+      const token = jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, {
+        expiresIn: Math.floor(TOKEN_TTL_MS / 1000),
+      });
+      setAuthCookie(res, token);
+      res.status(200).json({ token, user: toPublicUser(user) });
     } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: e.errors[0].message });
+      }
       res.status(500).json({ message: "Internal server error" });
     }
+  });
+
+  app.post(api.auth.logout.path, (_req, res) => {
+    clearAuthCookie(res);
+    res.status(204).end();
   });
 
   app.get(api.auth.me.path, authenticateToken, async (req, res) => {
     const user = await storage.getUser((req as any).user.id);
     if (!user) return res.status(401).json({ message: "User not found" });
-    res.json(user);
+    res.json(toPublicUser(user));
+  });
+
+  app.patch(api.users.me.update.path, authenticateToken, async (req, res) => {
+    try {
+      const input = api.users.me.update.input.parse(req.body);
+      if (input.displayName === undefined && input.avatarUrl === undefined) {
+        return res.status(400).json({ message: "No fields to update" });
+      }
+
+      const updated = await storage.updateUserProfile((req as any).user.id, input);
+      res.json(toPublicUser(updated));
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: e.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   // --- Data Routes ---
@@ -154,8 +321,31 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
   });
 
+  app.patch(api.servers.update.path, authenticateToken, async (req, res) => {
+    try {
+      const serverId = parseInt(getParam(req.params.id), 10);
+      const server = await storage.getServer(serverId);
+      if (!server) return res.status(404).json({ message: "Server not found" });
+
+      const member = await storage.getServerMember(serverId, (req as any).user.id);
+      if (!member) return res.status(403).json({ message: "Not a member" });
+      if (member.role !== "owner" && member.role !== "admin") {
+        return res.status(403).json({ message: "Not allowed" });
+      }
+
+      const input = api.servers.update.input.parse(req.body);
+      const updated = await storage.updateServer(serverId, { name: input.name });
+      res.json(updated);
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: e.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get(api.servers.get.path, authenticateToken, async (req, res) => {
-    const serverId = parseInt(req.params.id);
+    const serverId = parseInt(getParam(req.params.id), 10);
     const server = await storage.getServer(serverId);
     if (!server) return res.status(404).json({ message: "Server not found" });
 
@@ -173,20 +363,60 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.post(api.servers.join.path, authenticateToken, async (req, res) => {
-    const serverId = parseInt(req.params.id);
+    const serverId = parseInt(getParam(req.params.id), 10);
+    const server = await storage.getServer(serverId);
+    if (!server) return res.status(404).json({ message: "Server not found" });
     const member = await storage.addServerMember(serverId, (req as any).user.id);
     res.json(member);
   });
 
+  app.post(api.servers.invite.path, authenticateToken, async (req, res) => {
+    try {
+      const serverId = parseInt(getParam(req.params.id), 10);
+      const server = await storage.getServer(serverId);
+      if (!server) return res.status(404).json({ message: "Server not found" });
+
+      const { username } = api.servers.invite.input.parse(req.body);
+
+      const inviterId = (req as any).user.id as number;
+      const inviterMember = await storage.getServerMember(serverId, inviterId);
+      if (!inviterMember) return res.status(403).json({ message: "Not a member" });
+      if (inviterMember.role !== "owner" && inviterMember.role !== "admin") {
+        return res.status(403).json({ message: "Not allowed" });
+      }
+
+      const handle = username.trim().replace(/^@+/, "");
+      if (!handle) return res.status(400).json({ message: "Invalid username" });
+
+      const invited = await storage.getUserByUsername(handle);
+      if (!invited) return res.status(404).json({ message: "User not found" });
+
+      await storage.addServerMember(serverId, invited.id, "member");
+      res.json({ ok: true });
+    } catch (e) {
+      if (e instanceof z.ZodError) {
+        return res.status(400).json({ message: e.errors[0].message });
+      }
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
   app.get(api.channels.list.path, authenticateToken, async (req, res) => {
-    const serverId = parseInt(req.params.serverId);
+    const serverId = parseInt(getParam(req.params.serverId), 10);
+    const isMember = await storage.isMember(serverId, (req as any).user.id);
+    if (!isMember) return res.status(403).json({ message: "Not a member" });
     const channels = await storage.getChannels(serverId);
     res.json(channels);
   });
 
   app.post(api.channels.create.path, authenticateToken, async (req, res) => {
     try {
-      const serverId = parseInt(req.params.serverId);
+      const serverId = parseInt(getParam(req.params.serverId), 10);
+      const member = await storage.getServerMember(serverId, (req as any).user.id);
+      if (!member) return res.status(403).json({ message: "Not a member" });
+      if (member.role !== "owner" && member.role !== "admin") {
+        return res.status(403).json({ message: "Not allowed" });
+      }
       const input = api.channels.create.input.parse(req.body);
       const channel = await storage.createChannel({ ...input, serverId });
       res.status(201).json(channel);
@@ -196,7 +426,14 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   app.get(api.channels.messages.path, authenticateToken, async (req, res) => {
-    const channelId = parseInt(req.params.channelId);
+    const channelId = parseInt(getParam(req.params.channelId), 10);
+    const channel = await storage.getChannel(channelId);
+    if (!channel) return res.status(404).json({ message: "Channel not found" });
+
+    if (channel.serverId) {
+      const isMember = await storage.isMember(channel.serverId, (req as any).user.id);
+      if (!isMember) return res.status(403).json({ message: "Not a member" });
+    }
     const messages = await storage.getMessages(channelId);
     res.json(messages);
   });
@@ -205,8 +442,20 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Socket.IO is usually preferred for realtime, but we can POST then emit
   app.post('/api/channels/:channelId/messages', authenticateToken, async (req, res) => {
     try {
-      const channelId = parseInt(req.params.channelId);
-      const { content, attachmentUrl } = req.body;
+      const channelId = parseInt(getParam(req.params.channelId), 10);
+      const { content, attachmentUrl } = req.body as { content?: string; attachmentUrl?: string };
+
+      if (!content && !attachmentUrl) {
+        return res.status(400).json({ message: "Message content or attachment is required" });
+      }
+
+      const channel = await storage.getChannel(channelId);
+      if (!channel) return res.status(404).json({ message: "Channel not found" });
+
+      if (channel.serverId) {
+        const isMember = await storage.isMember(channel.serverId, (req as any).user.id);
+        if (!isMember) return res.status(403).json({ message: "Not a member" });
+      }
       
       const message = await storage.createMessage({
         channelId,

@@ -7,6 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { format } from "date-fns";
+import { useToast } from "@/hooks/use-toast";
+import { type ProfileUser, UserProfileModal } from "@/components/UserProfileModal";
 
 export function ChatArea() {
   const params = useParams();
@@ -23,6 +25,9 @@ export function ChatArea() {
   const currentChannel = channels?.find(c => c.id === channelId);
   
   const [messageInput, setMessageInput] = useState("");
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileUser, setProfileUser] = useState<ProfileUser | null>(null);
+  const { toast } = useToast();
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -31,11 +36,10 @@ export function ChatArea() {
     }
   }, [messages]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!messageInput.trim()) return;
-    
-    const content = messageInput;
+  const sendMessage = async () => {
+    const content = messageInput.trim();
+    if (!content) return;
+
     setMessageInput("");
 
     try {
@@ -45,12 +49,20 @@ export function ChatArea() {
       });
     } catch (error) {
       console.error("Failed to send message:", error);
+      toast({ title: "Error", description: "Failed to send message", variant: "destructive" });
+      setMessageInput(content);
     }
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+    e.preventDefault();
+    void sendMessage();
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = "";
 
     try {
       const { url } = await uploadFileMutation.mutateAsync(file);
@@ -60,6 +72,7 @@ export function ChatArea() {
       });
     } catch (error) {
       console.error("Upload failed:", error);
+      toast({ title: "Error", description: "Upload failed", variant: "destructive" });
     }
   };
 
@@ -83,12 +96,6 @@ export function ChatArea() {
       <div className="h-12 px-4 flex items-center border-b border-border/40 shadow-sm z-10 bg-background/80 backdrop-blur-md">
         <Hash className="text-muted-foreground mr-2" size={20} />
         <h3 className="font-bold text-foreground">{currentChannel?.name}</h3>
-        {currentChannel?.topic && (
-           <>
-            <div className="h-4 w-[1px] bg-border mx-4" />
-            <span className="text-xs text-muted-foreground truncate">{currentChannel.topic}</span>
-           </>
-        )}
       </div>
 
       {/* Messages Area */}
@@ -114,11 +121,25 @@ export function ChatArea() {
           return (
             <div key={msg.id} className={`flex group ${isGrouped ? 'mt-1' : 'mt-6'}`}>
                {!isGrouped ? (
-                 <Avatar className="h-10 w-10 mr-4 border border-white/5 cursor-pointer hover:drop-shadow-lg transition-all mt-0.5">
-                    <AvatarImage src={msg.sender?.avatarUrl || undefined} />
-                    <AvatarFallback className="bg-secondary text-secondary-foreground">{msg.sender?.username.substring(0,2).toUpperCase()}</AvatarFallback>
-                 </Avatar>
-               ) : (
+                  <Avatar
+                    className="h-10 w-10 mr-4 border border-white/5 cursor-pointer hover:drop-shadow-lg transition-all mt-0.5"
+                    onClick={() => {
+                      if (!msg.sender) return;
+                      setProfileUser({
+                        id: msg.sender.id,
+                        username: msg.sender.username,
+                        displayName: msg.sender.displayName,
+                        avatarUrl: msg.sender.avatarUrl ?? null,
+                      });
+                      setProfileOpen(true);
+                    }}
+                  >
+                     <AvatarImage src={msg.sender?.avatarUrl || undefined} />
+                     <AvatarFallback className="bg-secondary text-secondary-foreground">
+                      {(msg.sender?.username?.slice(0, 2) || "??").toUpperCase()}
+                     </AvatarFallback>
+                  </Avatar>
+                ) : (
                  <div className="w-10 mr-4 text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 flex justify-center pt-1 select-none">
                    {format(new Date(msg.createdAt!), 'h:mm aa')}
                  </div>
@@ -204,18 +225,31 @@ export function ChatArea() {
           </form>
 
           <div className="flex items-center gap-1 self-start mt-0.5 ml-2">
-             <button className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded">
+             <button
+               type="button"
+               onClick={() => toast({ title: "Not implemented", description: "Gifts are not available yet." })}
+               className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded"
+             >
                 <Gift size={20} />
              </button>
-             <button className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded">
+             <button
+               type="button"
+               onClick={() => toast({ title: "Not implemented", description: "Stickers are not available yet." })}
+               className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded"
+             >
                 <Sticker size={20} />
              </button>
-             <button className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded">
+             <button
+               type="button"
+               onClick={() => toast({ title: "Not implemented", description: "Emoji picker is not available yet." })}
+               className="p-2 text-muted-foreground hover:text-primary transition-colors hover:bg-white/5 rounded"
+             >
                 <Smile size={20} />
              </button>
              {(messageInput.trim().length > 0 || uploadFileMutation.isPending) && (
                 <button 
-                  onClick={handleSendMessage}
+                  type="button"
+                  onClick={() => void sendMessage()}
                   disabled={uploadFileMutation.isPending}
                   className="p-2 text-primary hover:text-primary-foreground hover:bg-primary transition-colors rounded disabled:opacity-50"
                 >
@@ -225,6 +259,8 @@ export function ChatArea() {
           </div>
         </div>
       </div>
+
+      <UserProfileModal open={profileOpen} onOpenChange={setProfileOpen} user={profileUser} />
     </div>
   );
 }

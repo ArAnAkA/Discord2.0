@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <filter id="blur" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="7" />
+    </filter>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="#081010" />
+
+  <!-- Aurora glow -->
+  <g filter="url(#blur)" opacity="0.9">
+    <circle cx="22" cy="22" r="18" fill="#22d3ee" />
+    <circle cx="44" cy="24" r="18" fill="#a78bfa" />
+    <circle cx="34" cy="46" r="16" fill="#34d399" />
+  </g>
+
+  <!-- Stylized "A" -->
+  <path d="M32 12 L16 52 H24 L27 44 H37 L40 52 H48 L32 12 Z" fill="#ffffff" opacity="0.95" />
+  <path d="M32 24 L26.5 37 H37.5 L32 24 Z" fill="#081010" />
+</svg>
+
